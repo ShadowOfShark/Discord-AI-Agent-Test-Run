@@ -1,161 +1,66 @@
+"""Local Theodore character chat (Ollama + lore + relationship state)."""
 
 import sys
 from pathlib import Path
+
 from ollama import chat
 
-# ==========================================
-# 1. Project setup
-# ==========================================
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-sys.path.insert(
-    0,
-    str(PROJECT_ROOT / "personality")
-)
+sys.path.insert(0, str(PROJECT_ROOT / "personality"))
+sys.path.insert(0, str(PROJECT_ROOT / "storage"))
 
 from personality import load_character, build_system_prompt
 from lore_manager import load_lore, retrieve_lore
-
-
-# ==========================================
-# 2. Load character and lore
-# ==========================================
-
-character = load_character()
-system_prompt = build_system_prompt(character)
-lore = load_lore()
+from relationship_manager import load_relationships, get_relationship, save_relationships
 
 MODEL_NAME = "qwen3:1.7b"
-
-# Temporary trust level for testing
-trust_level = 35
-
-messages = [
-    {
-        "role": "system",
-        "content": system_prompt
-    }
-]
-
-
-# ==========================================
-# 3. Language detection
-# ==========================================
-
-def detect_language(text):
-    chinese_count = sum(
-        1 for char in text
-        if "\u4e00" <= char <= "\u9fff"
-    )
-
-    english_count = sum(
-        1 for char in text
-        if char.isascii() and char.isalpha()
-    )
-
-    if chinese_count > 0 and english_count > 0:
-        if chinese_count >= english_count / 2:
-            return "Chinese"
-        return "English"
-
-    if chinese_count > 0:
-        return "Chinese"
-
-    return "English"
-
-
-def build_language_instruction(language):
-    return {
-        "role": "system",
-        "content": (
-            f"Respond in {language}. "
-            "Follow the language of the latest user message. "
-            "Maintain Theodore's established personality. "
-            "Use restrained, polite and natural language. "
-            "Avoid excessive poetic monologues. "
-            "Do not invent biographical facts."
-        )
-    }
-
-
-# ==========================================
-# 4. Lore topic matching
-# ==========================================
-
-# Add aliases for questions that do not
-# contain the exact English lore ID.
+USER_ID = "local_test_user"
 
 LORE_ALIASES = {
-    "amelia": [
-        "amelia", "阿梅莉亚", "养女"
-    ],
-    "lady_victoria": [
-        "lady victoria", "victoria", "维多利亚"
-    ],
-    "cruise_incident": [
-        "cruise", "ship incident", "邮轮", "游轮",
-        "船上发生", "邮轮事件"
-    ],
-    "arawn": [
-        "arawn", "阿拉温"
-    ],
-    "istus": [
-        "istus", "命运之神"
-    ],
-    "brandy_hidgens": [
-        "brandy hidgens", "brandy"
-    ],
-    "astral_drift": [
-        "astral", "星界", "漂泊"
-    ],
-    "wager_against_fate": [
-        "wager", "bet against fate", "赌局", "命运赌约"
-    ],
-    "forced_drug_use": [
-        "forced drug", "父亲强迫", "强迫吸毒"
-    ]
+    "amelia": ["amelia", "阿梅莉亚", "养女"],
+    "lady_victoria": ["lady victoria", "victoria", "维多利亚"],
+    "cruise_incident": ["cruise", "ship incident", "邮轮", "游轮", "船上发生", "邮轮事件"],
+    "arawn": ["arawn", "阿拉温"],
+    "istus": ["istus", "命运之神"],
+    "brandy_hidgens": ["brandy hidgens", "brandy"],
+    "astral_drift": ["astral", "星界", "漂泊"],
+    "wager_against_fate": ["wager", "bet against fate", "赌局", "命运赌约"],
+    "forced_drug_use": ["forced drug", "父亲强迫", "强迫吸毒"],
 }
 
 
-def find_lore_topic(user_input):
-    text = user_input.casefold()
+def detect_language(text):
+    chinese_count = sum("\u4e00" <= ch <= "\u9fff" for ch in text)
+    english_count = sum(ch.isascii() and ch.isalpha() for ch in text)
+    if chinese_count and chinese_count >= english_count / 2:
+        return "Chinese"
+    if english_count:
+        return "English"
+    return "Chinese"  # Fallback for emoji, numbers, punctuation-only messages.
 
+
+def find_lore_topic(text):
+    text = text.casefold()
+    matches = []
     for topic_id, aliases in LORE_ALIASES.items():
-        if any(alias.casefold() in text for alias in aliases):
-            return topic_id
-
-    return None
-
-
-def get_lore_result(user_input):
-    topic_id = find_lore_topic(user_input)
-
-    if topic_id is None:
-        return {
-            "status": "unknown",
-            "topic": None
-        }
-
-    # Convert the matched topic to the format
-    # expected by the existing lore_manager.
-    query = topic_id.replace("_", " ")
-
-    return retrieve_lore(
-        lore,
-        query,
-        trust_level
-    )
+        for alias in aliases:
+            if alias.casefold() in text:
+                matches.append((len(alias), topic_id))
+                break
+    if not matches:
+        return None
+    return max(matches)[1]  # Prioritize more specific aliases.
 
 
-# ==========================================
-# 5. Private topic responses
-# ==========================================
+def get_lore_result(lore, user_input, trust_level):
+    topic = find_lore_topic(user_input)
+    if topic is None:
+        return {"status": "unknown", "topic": None}
+    return retrieve_lore(lore, topic.replace("_", " "), trust_level)
 
-def private_response(language, topic):
-    """Return a restrained refusal without
-    generating private event details."""
 
+
+def private_response(language):
     if language == "Chinese":
         return (
             "恐怕那并不是我愿意轻易谈论的事情。"
@@ -163,30 +68,42 @@ def private_response(language, topic):
         )
 
     return (
-        "I'm afraid that's not something "
-        "I care to discuss so readily. "
+        "I'm afraid that's not something I care to discuss so readily. "
         "I hope you'll forgive my discretion."
     )
 
 
-# ==========================================
-# 6. Build lore instruction
-# ==========================================
+
+def build_language_instruction(language):
+    return {
+        "role": "system",
+        "content": (
+            f"Respond in {language}, matching the latest user's language. "
+            "Remain Theodore Spencer: restrained, observant, polite and concise. "
+            "Do not confuse the user's experiences with your own. "
+            "Never invent established biographical facts."
+        ),
+    }
+
 
 def build_lore_instruction(result):
-    status = result["status"]
-
-    if status == "available":
-        facts = result.get("facts", [])
+    if result["status"] == "available":
+        facts = result.get("facts") or []
+        fact_text = "\n".join(f"- {fact}" for fact in facts)
         subjective = result.get("subjective_memory")
-
-        fact_text = "\n".join(
-            f"- {fact}" for fact in facts
+        content = (
+            "Relevant canonical lore (factual reference, NOT a requirement to disclose):\n"
+            f"{fact_text or 'No detailed facts recorded.'}\n"
+            "Do not contradict established facts or add unconfirmed events. "
+            "Theodore may remain discreet or decline to answer."
         )
-
-        if not fact_text:
-            fact_text = "No detailed facts recorded."
-
+        if subjective:
+            content += (
+                "\nSubjective or uncertain recollection:\n"
+                f"{subjective}\nTreat this as uncertain, not objective fact."
+            )
+    else:
+        
         content = (
             "CANONICAL CHARACTER LORE:\n"
             f"{fact_text}\n\n"
@@ -194,140 +111,89 @@ def build_lore_instruction(result):
             "character's source material. "
             "Do not contradict them. "
             "Do not invent additional historical events. "
+
+            # Relationship accuracy
+            "Use precise relationship terminology: "
+            "Amelia is Theodore's adopted daughter, "
+            "not foster daughter. "
+
             "You may answer briefly or decline to "
             "discuss sensitive details."
         )
 
-        if subjective:
-            content += (
-                "\n\nUNCERTAIN PERSONAL MEMORY:\n"
-                f"{subjective}\n"
-                "Treat this as Theodore's uncertain "
-                "recollection, not objective certainty."
+    return {"role": "system", "content": content}
+
+
+def main():
+    character = load_character()
+    system_prompt = build_system_prompt(character)
+    lore = load_lore()
+    relationships = load_relationships()
+    is_new_user = USER_ID not in relationships.get("users", {})
+    relationship = get_relationship(relationships, USER_ID)
+    if is_new_user:
+        save_relationships(relationships)
+    trust_level = relationship["trust"]
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    print(f"\n{character['name']} is ready!")
+    print("Bilingual mode: Chinese / English")
+    print(f"User: {USER_ID}")
+    print(f"Trust: {trust_level}")
+    print(f"Relationship: {relationship['relationship_stage']}")
+    print("Type 'exit' to quit.\n")
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nConversation ended.")
+            break
+
+        if user_input.lower() == "exit":
+            print("Conversation ended.")
+            break
+        if not user_input:
+            continue
+
+        language = detect_language(user_input)
+        lore_result = get_lore_result(lore, user_input, trust_level)
+        messages.append({"role": "user", "content": user_input})
+
+        if lore_result["status"] == "private":
+            ai_reply = private_response(language)
+            print(f"\n{character['name']}: {ai_reply}\n")
+            messages.append({"role": "assistant", "content": ai_reply})
+            continue
+
+        request_messages = [
+            messages[0],
+            *messages[1:-1],
+            build_language_instruction(language),
+            build_lore_instruction(lore_result),
+            messages[-1],
+        ]
+
+        try:
+            response = chat(
+                model=MODEL_NAME,
+                messages=request_messages,
+                think=False,
+                keep_alive="10m",
+                options={"temperature": 0.4, "num_predict": 220},
             )
+            ai_reply = response.message.content or ""
+            if not ai_reply.strip():
+                raise ValueError("Ollama returned an empty response")
+        except Exception as error:
+            messages.pop()  # Remove unanswered user turn.
+            print(f"\nOllama error: {error}\n")
+            continue
 
-    else:
-        content = (
-            "No relevant canonical facts were retrieved. "
-            "Do not invent established personal history. "
-            "If asked about unknown biographical details, "
-            "politely acknowledge uncertainty. "
-            "For ordinary conversation, respond naturally."
-        )
-
-    return {
-        "role": "system",
-        "content": content
-    }
+        print(f"\n{character['name']}: {ai_reply}\n")
+        messages.append({"role": "assistant", "content": ai_reply})
 
 
-# ==========================================
-# 7. Main conversation
-# ==========================================
-
-print(f"\n{character['name']} is ready!")
-print("Bilingual mode: Chinese / English")
-print(f"Current trust level: {trust_level}")
-print("Type 'exit' to quit.\n")
-
-
-while True:
-    try:
-        user_input = input("You: ").strip()
-
-    except (KeyboardInterrupt, EOFError):
-        print("\nConversation ended.")
-        break
-
-    if user_input.lower() == "exit":
-        print("Conversation ended.")
-        break
-
-    if not user_input:
-        continue
-
-    # Identify current language
-    language = detect_language(user_input)
-
-    # Find relevant lore and disclosure status
-    lore_result = get_lore_result(user_input)
-
-    # Save user message in current session
-    messages.append({
-        "role": "user",
-        "content": user_input
-    })
-
-    # ======================================
-    # Private lore: skip free generation
-    # ======================================
-
-    if lore_result["status"] == "private":
-        ai_reply = private_response(
-            language,
-            lore_result["topic"]
-        )
-
-        print(
-            f"\n{character['name']}: "
-            f"{ai_reply}\n"
-        )
-
-        messages.append({
-            "role": "assistant",
-            "content": ai_reply
-        })
-
-        continue
-
-    # ======================================
-    # Normal conversation
-    # ======================================
-
-    language_instruction = (
-        build_language_instruction(language)
-    )
-
-    lore_instruction = (
-        build_lore_instruction(lore_result)
-    )
-
-    # Core personality first,
-    # followed by history and current rules.
-    request_messages = [
-        messages[0],
-        *messages[1:-1],
-        language_instruction,
-        lore_instruction,
-        messages[-1]
-    ]
-
-    try:
-        response = chat(
-            model=MODEL_NAME,
-            messages=request_messages,
-            think=False,
-            keep_alive="10m",
-            options={
-                "temperature": 0.4,
-                "num_predict": 220
-            }
-        )
-
-        ai_reply = response.message.content
-
-        print(
-            f"\n{character['name']}: "
-            f"{ai_reply}\n"
-        )
-
-        messages.append({
-            "role": "assistant",
-            "content": ai_reply
-        })
-
-    except Exception as error:
-        # Remove the unanswered user message.
-        messages.pop()
-
-        print(f"\nOllama error: {error}\n")
+if __name__ == "__main__":
+    main()
