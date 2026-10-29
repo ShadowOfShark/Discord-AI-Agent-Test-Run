@@ -1,0 +1,24 @@
+﻿# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local AI Models
+models/
+*.gguf
+*.safetensors
+
+# Private Memory and Data
+memory/
+data/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Editor
+.vscode/
