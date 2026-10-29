@@ -2,7 +2,30 @@
 import json
 from pathlib import Path
 
+
 LORE_FILE = Path(__file__).parent / "lore.json"
+
+
+def search_lore(lore, query, trust_level):
+    """Find relevant lore that may be disclosed."""
+
+    query = query.lower()
+    results = []
+
+    accessible = get_accessible_lore(
+        lore,
+        trust_level
+    )
+
+    for item in accessible:
+        lore_id = item["id"]
+
+        # First version: match the topic ID
+        if lore_id.replace("_", " ") in query:
+            results.append(item)
+
+    return results
+
 
 # Privacy levels, from least to most private
 PRIVACY_LEVELS = {
@@ -59,16 +82,51 @@ def get_accessible_lore(lore, trust_level):
     return accessible
 
 
-if __name__ == "__main__":
+def retrieve_lore(lore, query, trust_level):
+    """Distinguish available, private, and unknown lore."""
 
+    query = query.lower()
+
+    for category in ("people", "events"):
+        for item in lore.get(category, []):
+            topic = item["id"].replace("_", " ")
+
+            if topic not in query:
+                continue
+
+            privacy = item.get(
+                "privacy_level",
+                item.get("disclosure", "guarded")
+            )
+
+            if can_disclose(privacy, trust_level):
+                return {
+                    "status": "available",
+                    "topic": item["id"],
+                    "facts": item.get("canonical_facts", []),
+                    "subjective_memory": item.get(
+                        "subjective_memory"
+                    )
+                }
+
+            return {
+                "status": "private",
+                "topic": item["id"]
+            }
+
+    return {
+        "status": "unknown",
+        "topic": None
+    }
+
+
+
+if __name__ == "__main__":
     lore = load_lore()
 
+    question = "What happened during the cruise incident?"
+
     for trust in (10, 35, 60, 90):
+        result = retrieve_lore(lore, question, trust)
 
-        accessible = get_accessible_lore(lore, trust)
-
-        print(f"\nTrust level: {trust}")
-        print("Accessible topics:")
-
-        for item in accessible:
-            print("-", item["id"])
+        print(f"Trust {trust}: {result['status']}")
