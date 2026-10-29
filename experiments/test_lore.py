@@ -114,7 +114,7 @@ def run_tests():
             lore_context = "\n".join(f"- {fact}" for fact in facts)
             try:
                 response = chat(
-                    model=MODEL_NAME,
+                    model="qwen3:4b",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {

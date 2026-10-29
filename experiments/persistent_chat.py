@@ -25,7 +25,7 @@ def load_memory(): ##从 JSON 文件恢复列表
             return json.load(file)
 
     return []
-## 这段代码目前只负责保存和读取
+## 这段代码目前只负责保存和读取，没有连接 AI。
 
 
 # Load previous conversation history
